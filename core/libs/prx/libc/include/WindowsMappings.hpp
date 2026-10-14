@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -279,7 +280,7 @@ public:
                     }
                 }
                 if (view.protection == PAGE_NOACCESS) return false;
-                const bool pinned = view.page->pins != 0;
+                const bool pinned = view.page->pins != 0 || !armShared;
                 std::uint8_t settled = 0;
                 auto settledEnd = cursor;
                 bool full = false;
@@ -490,6 +491,7 @@ private:
         unmap = reinterpret_cast<UnmapFunction>(GetProcAddress(module, "UnmapViewOfFile2"));
         if (!allocate || !map || !unmap) throw std::runtime_error("Windows placeholder memory APIs are required");
         compare = reinterpret_cast<CompareFunction>(GetProcAddress(module, "CompareObjectHandles"));
+        armShared = std::getenv("APS5_NO_ARM_SHARED") == nullptr;
     }
 
     [[noreturn]] static void fail(const char* operation) {
@@ -601,6 +603,12 @@ private:
     MapFunction map = nullptr;
     UnmapFunction unmap = nullptr;
     CompareFunction compare = nullptr;
+    // A write to an armed (write-protected) shared page faults, and Windows builds the exception frame
+    // right below the faulting thread's rsp: guest code is SysV and may keep live data in the 128-byte
+    // red zone there (Astro Bot's audio limiter keeps its loop counters in it and then overruns its
+    // buffers). APS5_NO_ARM_SHARED=1 never arms shared pages and treats them as pinned: every collect
+    // reports them written, so the GPU side re-reads them instead of trusting a fault to flag a write.
+    bool armShared = true;
 };
 
 }

@@ -242,10 +242,45 @@ bool HandleSse4a(EXCEPTION_POINTERS* info) {
     return true;
 }
 
+// Debug aid: APS5_TRACE_WRITE_FAULTS=1 prints the first three resumed writes to armed shared pages per
+// rip. Each one clobbers the faulting thread's red zone (see APS5_NO_ARM_SHARED in WindowsMappings.hpp),
+// so a fault inside the leaf function that later crashes points at that.
+void TraceWriteFault(const EXCEPTION_POINTERS* info) {
+    static const bool enabled = IsEnvironmentSet("APS5_TRACE_WRITE_FAULTS");
+    if (!enabled) return;
+    static std::mutex mutex;
+    static std::uint64_t rips[4096];
+    static std::uint32_t hits[4096];
+    static std::size_t used = 0;
+    static std::atomic<unsigned long long> total{0};
+    const auto count = ++total;
+    const auto rip = info->ContextRecord->Rip;
+    std::uint32_t seen = 0;
+    {
+        std::lock_guard lock(mutex);
+        std::size_t index = 0;
+        while (index < used && rips[index] != rip) ++index;
+        if (index == used) {
+            if (used == std::size(rips)) return;
+            rips[used] = rip;
+            hits[used++] = 0;
+        }
+        seen = ++hits[index];
+    }
+    if (seen > 3) return;
+    char line[MAX_PATH + 64];
+    DescribeAddress(rip, line, sizeof(line));
+    Report("[write-fault] #%llu thread %lu rip %s write of 0x%llx rsp 0x%llx (hit %u of this rip)\n", count, GetCurrentThreadId(), line,
+        static_cast<unsigned long long>(info->ExceptionRecord->ExceptionInformation[1]), static_cast<unsigned long long>(info->ContextRecord->Rsp), seen);
+}
+
 LONG WINAPI ReportCrash(EXCEPTION_POINTERS* info) {
     static std::atomic<bool> reported{false};
     const auto* fault = info->ExceptionRecord;
-    if (fault->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && fault->NumberParameters >= 2 && fault->ExceptionInformation[0] == 1 && GuestArena::GuestArenaHandleWrite_nid_postfix(fault->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
+    if (fault->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && fault->NumberParameters >= 2 && fault->ExceptionInformation[0] == 1 && GuestArena::GuestArenaHandleWrite_nid_postfix(fault->ExceptionInformation[1])) {
+        TraceWriteFault(info);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (HandleWatch(info)) return EXCEPTION_CONTINUE_EXECUTION;
     if (HandleSse4a(info)) return EXCEPTION_CONTINUE_EXECUTION;
     const auto* record = info->ExceptionRecord;

@@ -283,6 +283,11 @@ if(BUILD_TESTING)
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:libc>")
     endif()
 
+    add_test_executable(agc_host_import_budget_tests tests/HostImportBudget.cpp)
+    target_include_directories(agc_host_import_budget_tests PRIVATE ${LIBS_INCLUDE_DIR})
+    add_test(NAME agc_host_import_budget COMMAND agc_host_import_budget_tests)
+    set_tests_properties(agc_host_import_budget PROPERTIES TIMEOUT 10)
+
     add_test_executable(agc_profile_output_tests tests/ProfileOutput.cpp)
     target_include_directories(agc_profile_output_tests PRIVATE ${LIBS_INCLUDE_DIR})
     target_link_libraries(agc_profile_output_tests PRIVATE libc)

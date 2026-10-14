@@ -186,19 +186,38 @@ void CheckConcurrentWrites() {
     region.Collect(Collection::Armed);
     Require(region.Collect(Collection::Armed).empty(), "concurrent writes did not settle");
 }
+
+// Run with APS5_NO_ARM_SHARED=1: shared views stay writable, so a guest write never faults, and every
+// collection reports them written.
+void CheckUnarmed() {
+    Region region;
+    Require(region.Collect(Collection::All) == Pages(0, 16), "unarmed collect missed a page");
+    Require(region.Protection(0) == PAGE_READWRITE && region.Protection(0, true) == PAGE_READWRITE, "unarmed collect protected a view");
+    const auto before = faults.load();
+    region.Write(0, 1);
+    region.Write(9, 2);
+    static_cast<volatile unsigned char*>(region.alias)[4 * Small] = 3;
+    Require(faults == before, "a write to an unarmed view faulted");
+    Require(region.Collect(Collection::All) == Pages(0, 16), "unarmed collect trusted a page as clean");
+    Require(region.Collect(Collection::Armed) == Pages(0, 16), "unarmed armed collect trusted a page as clean");
+}
 }
 
 int main() {
     auto* handler = AddVectoredExceptionHandler(1, HandleWrite);
     try {
         Require(handler != nullptr, "cannot install test handler");
-        CheckArmed();
-        CheckFresh();
-        CheckAliasesAndCapacity();
-        CheckPinsAndHostWrites();
-        CheckFailureAndHoles();
-        CheckPrivate();
-        CheckConcurrentWrites();
+        if (std::getenv("APS5_NO_ARM_SHARED") != nullptr) {
+            CheckUnarmed();
+        } else {
+            CheckArmed();
+            CheckFresh();
+            CheckAliasesAndCapacity();
+            CheckPinsAndHostWrites();
+            CheckFailureAndHoles();
+            CheckPrivate();
+            CheckConcurrentWrites();
+        }
         std::cout << "Windows deferred write-watch tests passed\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';

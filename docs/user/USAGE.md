@@ -158,6 +158,17 @@ Do not disable Dozen if it is the only Vulkan driver available; the application 
 
 GPU results in storage images and render targets stay on the GPU until something reads their memory. A title that frees such an image after waiting for its GPU work and reuses the memory can have its new data overwritten when the results are stored later ([TechnicalDebt](../dev/TechnicalDebt.md)). `APS5_STORE_AT_FLIP=1` stores every pending result when a display buffer is flipped, at the cost of one write-back per pending image and frame. Any other value stops the title at its first flip.
 
+### Crashes after a write to shared memory
+
+Windows only. The CPU's writes to shared guest memory are found by write-protecting it and catching the first write to each page. Catching that write overwrites a few hundred bytes below the writing thread's stack pointer, which some game code still uses, so a title can crash in its own code shortly after start-up (ASTRO BOT crashes in its audio thread `SceSndzAudioOutMain`). `APS5_TRACE_WRITE_FAULTS=1` prints the first caught writes per instruction, to tell whether a crash follows one.
+
+In ASTRO BOT the protected data that only the CPU uses comes from memory the GPU could not import: the log then shows `[gpu] host import budget: ... refused`, and the whole refused range (3.2 GB) is mirrored to the GPU and protected. `APS5_HOST_IMPORT_MIB` sets the import budget in MiB. On Windows it defaults to half the physical memory less 2 GiB, and never less than 6144 MiB, which is the default on other systems. ASTRO BOT needs more than 12288 MiB, which a 32 GB machine gets by default. A budget past what the graphics driver can pin makes ordinary allocations fail. `APS5_NO_ARM_SHARED=1` never write-protects shared memory and treats all of it as written at each check instead, which removes these crashes whatever the budget, at the cost of more GPU uploads.
+
+```powershell
+$env:APS5_NO_ARM_SHARED = '1'
+.\app.exe
+```
+
 ### Tracing system library calls
 
 Windows only. An executable converted with `--trace-imports` records the calls it makes to the libraries named in `APS5_TRACE_CALLS`, a comma-separated list such as `libkernel,libSceSaveData`, or `all`. Without the variable nothing is recorded. The crash and abort reports then end with the last 64 calls: sequence number, thread, library, import name as the executable imports it (a NID) and the caller's address. They are followed by the 32 most called imports since start-up, with their number of calls.
