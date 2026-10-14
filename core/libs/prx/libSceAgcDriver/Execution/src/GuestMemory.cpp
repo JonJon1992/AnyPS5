@@ -1192,7 +1192,7 @@ void Unwatch(std::uint64_t address, std::size_t bytes) {
     unwatchLocked(tracker, address, bytes);
 }
 
-bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function<bool()>& import, bool staysWatched) {
+bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function<bool()>& import, bool staysWatched, bool compareWindow) {
     if (bytes == 0 || bytes > std::numeric_limits<std::uint64_t>::max() - address) return import();
     auto& tracker = Tracker();
     auto lock = lockTracker(tracker);
@@ -1206,7 +1206,7 @@ bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function
     const auto stop = (address + bytes + page - 1) & ~(page - 1);
     const bool covered = tracker.covers(first, static_cast<std::size_t>(stop - first));
     std::vector<std::byte> saved;
-    if (covered && staysWatched) {
+    if (covered && staysWatched && compareWindow) {
         CheckRange(reinterpret_cast<const void*>(first), static_cast<std::size_t>(stop - first), 1, false);
         const auto* source = reinterpret_cast<const std::byte*>(first);
         saved.assign(source, source + (stop - first));
@@ -1219,7 +1219,7 @@ bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function
         return true;
     }
     const WindowCopy window{first, saved};
-    if (!before || !walkWrites(tracker, first, stop, StampKind::Cpu, true, &window)) unwatchLocked(tracker, first, static_cast<std::size_t>(stop - first));
+    if (!before || !walkWrites(tracker, first, stop, StampKind::Cpu, true, compareWindow ? &window : nullptr)) unwatchLocked(tracker, first, static_cast<std::size_t>(stop - first));
     return true;
 }
 

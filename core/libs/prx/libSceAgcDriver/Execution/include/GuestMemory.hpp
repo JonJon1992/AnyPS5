@@ -60,7 +60,11 @@ void WriteChanged(std::uint64_t address, std::span<const std::byte> current, std
 // UnchangedSince is always false, so callers fall back to comparing bytes.
 bool WriteWatched();
 void Unwatch(std::uint64_t address, std::size_t bytes);
-bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function<bool()>& import, bool staysWatched = true);
+// compareWindow: the import may itself make the watch report writes (a driver touching imported
+// private pages), so the range is saved before it and the pages reported after it that still hold
+// the saved bytes are stamped as import noise, not CPU stores. An import through a separate alias of
+// shared memory leaves the guest views' tracking alone and needs no copy of the range.
+bool ImportWatched(std::uint64_t address, std::size_t bytes, const std::function<bool()>& import, bool staysWatched = true, bool compareWindow = true);
 bool Watched(std::uint64_t address, std::size_t bytes);
 std::uint64_t CollectWrites(std::uint64_t address, std::size_t bytes);
 bool UnchangedSince(std::uint64_t address, std::size_t bytes, std::uint64_t generation);

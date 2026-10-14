@@ -820,10 +820,16 @@ const HostImport* importRunAt(const Context& context, HostImports& state, Import
     const bool watchedHostPointer = !state.unwatchImports;
     const bool watchedDmaBuf = !state.unwatchDmaBufImports;
 #endif
+#ifdef _WIN32
+    // The driver touches only the alias, whose writes never disarm the guest views.
+    const bool compareWindow = entry.alias == nullptr;
+#else
+    const bool compareWindow = true;
+#endif
     GuestMemory::ImportWatched(base, bytes, [&] {
         step = watchedDmaBuf == watchedHostPointer ? createImport(context, entry, result) : createHostPointerImport(context, entry, result);
         return step == nullptr;
-    }, watchedHostPointer);
+    }, watchedHostPointer, compareWindow);
 #ifndef _WIN32
     if (BackingFile backing; step != nullptr && watchedDmaBuf != watchedHostPointer && sharedBacking(context, entry, backing)) {
         GuestMemory::ImportWatched(base, bytes, [&] {

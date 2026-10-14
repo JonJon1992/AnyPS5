@@ -226,6 +226,12 @@ void CheckDeferredSharedImports() {
         return true;
     }), "tracked import window failed");
     Require(!UnchangedSince(third, Block, cached) && WrittenSince(third, Block, cached), "a store of new bytes within a tracked import window was missed");
+    const auto aliased = CollectWritesUncached(third, Block);
+    Require(ImportWatched(third, Block, [&] {
+        static_cast<volatile std::uint8_t*>(memory)[2 * Block + 8] = 0x56;
+        return true;
+    }, true, false), "uncompared import window failed");
+    Require(!UnchangedSince(third, Block, aliased) && WrittenSince(third, Block, aliased), "a store within an uncompared import window was missed");
     const auto afterImport = CollectWritesUncached(third, Block);
     static_cast<volatile std::uint8_t*>(memory)[2 * Block] = 0x66;
     Require(ImportWatched(third, Block, [] { return true; }) && WrittenSince(third, Block, afterImport), "pre-import CPU store was not collected");
