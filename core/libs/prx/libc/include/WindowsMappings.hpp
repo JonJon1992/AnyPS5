@@ -251,6 +251,8 @@ public:
                 }
             }
         } else if (clear && !collectable(address, end)) return false;
+        // The view after the last one collected: the next page of a contiguous run needs no search.
+        auto following = views.end();
         for (auto cursor = address; cursor < end;) {
             const auto nextClean = cleanRanges.upper_bound(cursor);
             if (nextClean != cleanRanges.begin()) {
@@ -261,8 +263,9 @@ public:
                 }
             }
             const auto base = cursor & ~(pageBytes - 1);
-            const auto found = views.find(base);
+            const auto found = following != views.end() && following->first == base ? following : views.find(base);
             if (found != views.end()) {
+                following = std::next(found);
                 auto& view = found->second;
                 auto stop = std::min(std::min(end, base + pageBytes), nextClean == cleanRanges.end() ? end : nextClean->first);
                 if (collection != Collection::All) {
@@ -309,7 +312,7 @@ public:
                 if (clear && !pinned && settled != 0) {
                     std::uint8_t untracked = 0;
                     for (const auto alias : view.page->aliases) {
-                        auto& other = views.at(alias);
+                        auto& other = alias == base ? view : views.at(alias);
                         const auto arming = static_cast<std::uint8_t>(settled & ~other.armed);
                         if (!writable(other.protection) || arming == 0) continue;
                         if (other.hostWrites != 0) {
@@ -362,11 +365,26 @@ public:
 
 private:
     bool collectable(std::uintptr_t address, std::uintptr_t end) {
+        // The views are walked in order: a run of shared pages costs one search, not one per page.
+        // Clean ranges are skipped as Collect skips them: a view leaves them when its protection
+        // changes (invalidate) or it is unmapped (reset).
+        auto next = views.lower_bound(address & ~(pageBytes - 1));
+        auto nextClean = cleanRanges.upper_bound(address);
         for (auto cursor = address; cursor < end;) {
+            while (nextClean != cleanRanges.end() && nextClean->first <= cursor) ++nextClean;
+            if (nextClean != cleanRanges.begin()) {
+                const auto clean = std::prev(nextClean);
+                if (cursor < clean->second) {
+                    cursor = std::min(end, clean->second);
+                    continue;
+                }
+            }
             const auto base = cursor & ~(pageBytes - 1);
-            if (const auto found = views.find(base); found != views.end()) {
-                if (found->second.protection == PAGE_NOACCESS) return false;
+            if (next != views.end() && next->first < base) next = views.lower_bound(base);
+            if (next != views.end() && next->first == base) {
+                if (next->second.protection == PAGE_NOACCESS) return false;
                 cursor = std::min(end, base + pageBytes);
+                ++next;
                 continue;
             }
             const auto memory = query(cursor);
