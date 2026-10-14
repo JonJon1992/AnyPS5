@@ -2558,10 +2558,24 @@ void RunColorMetadataPass(const Context& context, const ColorMetadataPass& pass)
         }
         Require(IsDccClear(keys), std::string("CB metadata pass over DCC keys that are ") + DccKeysName(keys) + " (per-block metadata is not modeled)");
         const auto texel = clearTexel(color, keys);
-        const auto resident = metadataPassResident(context, color);
+        auto resident = metadataPassResident(context, color);
         if (resident != nullptr) {
             const char* refusal = nullptr;
-            const bool current = keys == DccKeys::ClearRegister ? clearToTexel(*resident, texel, color.elementBytes, refusal) : StorageTexture::FindPending(color.address, color.bytes) == resident || resident->UploadedKeys() == keys;
+            bool current = keys == DccKeys::ClearRegister ? clearToTexel(*resident, texel, color.elementBytes, refusal) : StorageTexture::FindPending(color.address, color.bytes) == resident || resident->UploadedKeys() == keys;
+            // As materializeRegisterClear: keys a recorded kernel still writes refuse the clear, and
+            // syncing through that write costs less than storing the surface's texels and uploading
+            // them again (ASTRO BOT: a 1920x1080 target every other frame of its menu). The wait
+            // gives up the GPU mutex, so the other queues keep recording; the resident image is
+            // looked up again after it, since another queue may have replaced it meanwhile.
+            const auto keyBytes = static_cast<std::size_t>(color.bytes / 256);
+            if (auto* recorder = Recorder::Active(); !current && keys == DccKeys::ClearRegister && keyBytes != 0 && recorder != nullptr && recorder->PendingWriteOverlaps(color.dccAddress, keyBytes)) {
+                Recorder::CountSync(2);
+                recorder->SyncThrough(color.dccAddress, keyBytes, true);
+                keys = CurrentDccKeys(color.dccAddress, color.bytes);
+                if (keys == DccKeys::Uncompressed) continue;
+                resident = metadataPassResident(context, color);
+                if (keys == DccKeys::ClearRegister && resident != nullptr) current = clearToTexel(*resident, texel, color.elementBytes, refusal);
+            }
             if (current) {
                 resident->MarkDirty();
                 MarkDccUncompressed(context, color.dccAddress, color.bytes, colorKeyCount(color, color.bytes));
