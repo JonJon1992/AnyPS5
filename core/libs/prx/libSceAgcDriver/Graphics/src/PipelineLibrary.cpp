@@ -1,5 +1,6 @@
 #include "prx/libSceAgcDriver/Graphics/include/PipelineLibrary.hpp"
 #include "prx/libSceAgcDriver/Execution/include/PerformanceTimer.hpp"
+#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <cstdlib>
@@ -73,9 +74,22 @@ void runJobs(LibraryStore& store) {
     }
 }
 
+// The link-time optimized pipelines are built off the draw path, as the VK_EXT_graphics_pipeline_library
+// proposal recommends. One worker fell minutes behind when a level brought hundreds of new pipelines
+// (ASTRO BOT's first hub: the worker at 74% while the fast-linked ones ran). The pipeline cache is
+// internally synchronized and a job only reads its libraries, so several workers share the queue.
+// APS5_PIPELINE_OPTIMIZE_THREADS=<n> sets their count (default: a quarter of the hardware threads, 1 to 4).
+std::size_t optimizeThreads() {
+    if (const char* text = std::getenv("APS5_PIPELINE_OPTIMIZE_THREADS")) {
+        const auto count = std::strtoul(text, nullptr, 10);
+        if (count != 0) return std::min<std::size_t>(count, 64);
+    }
+    return std::clamp<std::size_t>(std::thread::hardware_concurrency() / 4u, 1u, 4u);
+}
+
 void enqueue(LibraryStore& store, VkDevice device, std::function<void()> job) {
     if (!store.started) {
-        std::thread(runJobs, std::ref(store)).detach();
+        for (std::size_t worker = 0; worker < optimizeThreads(); ++worker) std::thread(runJobs, std::ref(store)).detach();
         store.started = true;
     }
     ++store.pending[device];
@@ -204,9 +218,11 @@ VkPipeline LinkPipelineFromLibraries(const Context& context, const VkGraphicsPip
             break;
         }
         VkPipeline handle = VK_NULL_HANDLE;
-        if (partsOnly) lock.unlock();
+        // The compile runs without the store's lock on the draw path too: the optimize workers take
+        // it for every job, and a part another thread built meanwhile wins the race below.
+        lock.unlock();
         const auto created = context.Function<PFN_vkCreateGraphicsPipelines>("vkCreateGraphicsPipelines")(context.device, context.pipelineCache, 1, &create, nullptr, &handle);
-        if (partsOnly) lock.lock();
+        lock.lock();
         Check(created, "vkCreateGraphicsPipelines library");
         if (const auto raced = cache.find(key); raced != cache.end()) {
             device.destroyPipeline(context.device, handle, nullptr);
