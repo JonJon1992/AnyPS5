@@ -112,7 +112,9 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
     if (!drainAll && !cpuStores && (opcode == 0x40 || opcode == 0x50 || opcode == 0x83)) {
         constexpr std::size_t gpuStoreLimit = 65536;
         bool drained = true;
+        bool resolved = false;
         if (const auto store = Pm4::ResolveStore(packet, queue, gpuStoreLimit)) {
+            resolved = true;
             const auto bytes = store->Bytes();
             if (bytes.empty()) {
 
@@ -166,6 +168,12 @@ bool Driver::preparePacketMemory(const Submission& submission, QueueState& queue
             }
         }
         if (drained) ++storesDrained;
+        if (drained && !resolved) ++unresolvedStoresDrained;
+        if (drained && !resolved && profile && opcode == 0x50) {
+            const auto bytes = packet[6] & 0x3ffffffu;
+            const auto sizeClass = bytes <= 65536u ? 0u : bytes <= (1u << 20u) ? 1u : 2u;
+            ++unresolvedDmaDrains[(Pm4::DmaSource(packet) & 3u) * 12u + (Pm4::DmaDestination(packet) & 3u) * 3u + sizeClass];
+        }
     }
 
     static const bool drawDrain = std::getenv("APS5_DRAW_DRAIN") != nullptr;

@@ -602,10 +602,16 @@ std::optional<StoreWrite> ResolveStore(std::span<const std::uint32_t> packet, co
             return StoreWrite{destination, {}, copyDataSource(packet, bytes)};
         }
         case 0x50: {
-            if (packet.size() < 7 || dmaDestination(packet) == DmaSelectGds) return std::nullopt;
+            if (packet.size() < 7) return std::nullopt;
             if (dmaDestination(packet) == DmaSelectNowhere) return StoreWrite{address(packet[2], packet[3]), {}, {}};
             const std::size_t bytes = packet[6] & 0x3ffffffu;
-            const auto destination = address(packet[4], packet[5]);
+            // The GDS is the host block shaders bind as a writable guest buffer (ShaderResources), so
+            // a store into it takes the same paths as one into guest memory; ASTRO BOT resets GDS
+            // counters some 80 times a frame, and each one drained the device before.
+            // Debug aid: APS5_DRAIN_GDS_STORES=1 drains them as before.
+            static const bool drainGds = std::getenv("APS5_DRAIN_GDS_STORES") != nullptr;
+            if (dmaDestination(packet) == DmaSelectGds && (drainGds || packet[5] != 0 || !gdsRange(packet[4], bytes))) return std::nullopt;
+            const auto destination = dmaDestination(packet) == DmaSelectGds ? GdsAddress() + packet[4] : address(packet[4], packet[5]);
             if (!fits(destination, bytes)) return std::nullopt;
             return StoreWrite{destination, {}, dmaSourceBytes(packet)};
         }
