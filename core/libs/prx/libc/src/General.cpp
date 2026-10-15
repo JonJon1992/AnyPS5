@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -75,6 +76,14 @@ std::filesystem::path ResolveHostPath(std::filesystem::path root, const std::fil
     const auto direct = root / relative;
     std::error_code error;
     if (std::filesystem::exists(direct, error)) return direct;
+#ifdef _WIN32
+    // NTFS looks names up without case already, so a path exists() missed has no other spelling:
+    // the scan below only listed whole directories for every probe of a missing file (ASTRO BOT's
+    // loader probes thousands), each entry's times converted through the time zone. Debug aid:
+    // APS5_CASE_SCAN=1 scans as before, for a directory made case-sensitive (fsutil, WSL).
+    static const bool scan = std::getenv("APS5_CASE_SCAN") != nullptr;
+    if (!scan) return direct;
+#endif
     for (const auto& part : relative) {
         const auto candidate = root / part;
         const auto status = std::filesystem::symlink_status(candidate, error);
