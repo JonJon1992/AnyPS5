@@ -2410,7 +2410,7 @@ bool VulkanDevice::PresentClear(std::uint32_t width, std::uint32_t height, bool 
 }
 
 void VulkanDevice::PresentPixels(std::uint32_t width, std::uint32_t height, std::span<const std::byte> pixels) {
-    APS5_LOG_OUT("PresentPixels width=%u height=%u pixels=%zu expected=%llu", width, height, pixels.size(), static_cast<unsigned long long>(width) * height * 4u);
+    APS5_LOG_OUT_DEBUG("PresentPixels width=%u height=%u pixels=%zu expected=%llu", width, height, pixels.size(), static_cast<unsigned long long>(width) * height * 4u);
     require(width != 0 && height != 0 && width <= 16384 && height <= 16384, "invalid display image extent");
     require(pixels.size() == static_cast<std::uint64_t>(width) * height * 4, "invalid display pixel buffer size");
     // Debug aid: APS5_DUMP_FRAMES=<n> saves the first n presented frames as frame_<index>.bmp.
