@@ -3,6 +3,7 @@
 
 #include "Recompiler.hpp"
 #include <array>
+#include <bit>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
@@ -76,11 +77,49 @@ private:
     static constexpr std::size_t PageBytes = 4096;
     static constexpr std::size_t PageWords = PageBytes / sizeof(std::uint32_t);
 
+    // A page's word marks as 64-bit words, so the region lists walk them run by run instead of
+    // testing all 1024 bits of every page touched (Regions and TakeRecentRegions on each capture).
+    struct WordMarks {
+        std::array<std::uint64_t, PageWords / 64> bits{};
+        void Set(std::size_t index) { bits[index / 64] |= std::uint64_t{1} << (index % 64); }
+        bool None() const {
+            for (const auto word : bits) {
+                if (word != 0) return false;
+            }
+            return true;
+        }
+        void Reset() { bits.fill(0); }
+        // Calls visit(first, end) for each run of marked words, in address order.
+        template <typename TVisit>
+        void ForEachRun(TVisit&& visit) const {
+            std::size_t word = 0;
+            std::uint64_t pending = bits[0];
+            while (true) {
+                while (pending == 0) {
+                    if (++word == bits.size()) return;
+                    pending = bits[word];
+                }
+                const std::size_t first = word * 64 + static_cast<std::size_t>(std::countr_zero(pending));
+                std::uint64_t clear = ~bits[word] & (~std::uint64_t{0} << (first % 64));
+                while (clear == 0) {
+                    if (++word == bits.size()) {
+                        visit(first, PageWords);
+                        return;
+                    }
+                    clear = ~bits[word];
+                }
+                const std::size_t end = word * 64 + static_cast<std::size_t>(std::countr_zero(clear));
+                visit(first, end);
+                pending = bits[word] & (~std::uint64_t{0} << (end % 64));
+            }
+        }
+    };
+
     struct Page {
         std::array<std::uint32_t, PageWords> words{};
         std::bitset<PageWords> valid;
-        std::bitset<PageWords> read;
-        std::bitset<PageWords> recent;
+        WordMarks read;
+        WordMarks recent;
         bool wordwise = false;
     };
 
