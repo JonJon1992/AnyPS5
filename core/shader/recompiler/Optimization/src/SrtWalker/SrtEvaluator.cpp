@@ -2,6 +2,7 @@
 #include "Optimization/SrtWalker/SrtAddressArithmetic.hpp"
 #include "Optimization/SrtWalker/SrtInstructionPredicates.hpp"
 #include "IntermediateRepresentation/IrBuilder.hpp"
+#include "ThreadOwned.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -10,8 +11,41 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <memory>
 
 namespace ShaderRecompiler::Detail {
+
+namespace {
+
+struct EvaluatedTables {
+    std::vector<std::unique_ptr<EvaluatedValues::Table>> free;
+};
+
+EvaluatedTables& evaluatedTables() {
+    thread_local EvaluatedTables* tables = nullptr;
+    return ThreadOwned(tables);
+}
+
+}
+
+EvaluatedValues::Table* EvaluatedValues::Acquire() {
+    auto& free = evaluatedTables().free;
+    std::unique_ptr<Table> table;
+    if (free.empty()) {
+        table = std::make_unique<Table>();
+    } else {
+        table = std::move(free.back());
+        free.pop_back();
+    }
+    ++table->generation;
+    table->count = 0;
+    table->visiting.clear();
+    return table.release();
+}
+
+void EvaluatedValues::Release(Table* table) {
+    evaluatedTables().free.emplace_back(table);
+}
 
 bool Evaluator::Evaluate(IrValue* value, std::uint32_t& result) {
     std::uint64_t wide = 0;

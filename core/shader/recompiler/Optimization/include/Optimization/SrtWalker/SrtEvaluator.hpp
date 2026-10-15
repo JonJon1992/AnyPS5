@@ -10,60 +10,82 @@
 
 namespace ShaderRecompiler::Detail {
 
+// The values one evaluator has computed, in a table borrowed from the thread for its lifetime: a
+// capture builds two evaluators, and a fresh table grew from 64 slots with a rehash per doubling
+// each time. A slot belongs to the current evaluator only when it carries its generation, so
+// handing the table to the next one is an increment, not a clear. The table also lends the
+// evaluator its visiting stack.
 class EvaluatedValues {
 public:
+    EvaluatedValues() : _table(Acquire()) {}
+    ~EvaluatedValues() { Release(_table); }
+    EvaluatedValues(const EvaluatedValues&) = delete;
+    EvaluatedValues& operator=(const EvaluatedValues&) = delete;
+
     bool Find(const IrValue* key, std::uint64_t& value) const {
-        if (_slots.empty()) {
+        const auto& slots = _table->slots;
+        if (_table->count == 0) {
             return false;
         }
-        for (std::size_t index = Home(key);; index = (index + 1u) & (_slots.size() - 1u)) {
-            const auto& slot = _slots[index];
+        for (std::size_t index = Home(key, slots.size());; index = (index + 1u) & (slots.size() - 1u)) {
+            const auto& slot = slots[index];
+            if (slot.generation != _table->generation) {
+                return false;
+            }
             if (slot.key == key) {
                 value = slot.value;
                 return true;
             }
-            if (slot.key == nullptr) {
-                return false;
-            }
         }
     }
     void Insert(const IrValue* key, std::uint64_t value) {
-        if ((_count + 1u) * 2u > _slots.size()) {
+        if ((_table->count + 1u) * 2u > _table->slots.size()) {
             Grow();
         }
-        for (std::size_t index = Home(key);; index = (index + 1u) & (_slots.size() - 1u)) {
-            auto& slot = _slots[index];
+        auto& slots = _table->slots;
+        for (std::size_t index = Home(key, slots.size());; index = (index + 1u) & (slots.size() - 1u)) {
+            auto& slot = slots[index];
+            if (slot.generation != _table->generation) {
+                slot = {key, value, _table->generation};
+                ++_table->count;
+                return;
+            }
             if (slot.key == key) {
                 return;
             }
-            if (slot.key == nullptr) {
-                slot = {key, value};
-                ++_count;
-                return;
-            }
         }
     }
+    std::vector<IrValue*>& Visiting() { return _table->visiting; }
 
-private:
     struct Slot {
         const IrValue* key = nullptr;
         std::uint64_t value = 0;
+        std::uint64_t generation = 0;
     };
-    std::size_t Home(const IrValue* key) const {
-        return static_cast<std::size_t>((reinterpret_cast<std::uintptr_t>(key) >> 4u) * 0x9e3779b97f4a7c15ull >> 32u) & (_slots.size() - 1u);
+    struct Table {
+        std::vector<Slot> slots;
+        std::size_t count = 0;
+        std::uint64_t generation = 0;
+        std::vector<IrValue*> visiting;
+    };
+
+private:
+    static Table* Acquire();
+    static void Release(Table* table);
+    static std::size_t Home(const IrValue* key, std::size_t size) {
+        return static_cast<std::size_t>((reinterpret_cast<std::uintptr_t>(key) >> 4u) * 0x9e3779b97f4a7c15ull >> 32u) & (size - 1u);
     }
     void Grow() {
-        std::vector<Slot> previous(_slots.empty() ? 64u : _slots.size() * 2u);
-        previous.swap(_slots);
-        _count = 0;
+        std::vector<Slot> previous(_table->slots.empty() ? 64u : _table->slots.size() * 2u);
+        previous.swap(_table->slots);
+        _table->count = 0;
         for (const auto& slot : previous) {
-            if (slot.key != nullptr) {
+            if (slot.generation == _table->generation) {
                 Insert(slot.key, slot.value);
             }
         }
     }
-    std::vector<Slot> _slots;
-    std::size_t _count = 0;
+    Table* _table;
 };
 
 struct InaccessibleRead {
@@ -98,7 +120,7 @@ private:
     InaccessibleRead* _inaccessible = nullptr;
     std::uint32_t* _nullRoots = nullptr;
     EvaluatedValues _cache;
-    std::vector<IrValue*> _visiting;
+    std::vector<IrValue*>& _visiting = _cache.Visiting();
 };
 
 }
